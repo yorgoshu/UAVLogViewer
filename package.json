@@ -55,7 +55,8 @@
     "vue-flight-indicators": "^0.1.1",
     "vue-router": "^3.5.4",
     "vue-simple-suggest": "^1.11.2",
-    "webpack-eslint-plugin": "^1.2.0"
+    "webpack-eslint-plugin": "^1.2.0",
+    "uuid": "^9.0.1"
   },
   "devDependencies": {
     "@babel/core": "^7.22.5",

@@ -13,7 +13,7 @@ RUN git config --system --add safe.directory /usr/src/app
 COPY package*.json ./
 
 # install deps cleanly
-RUN npm ci
+RUN npm install
 
 # now copy the rest of the source
 COPY . .
@@ -23,3 +23,6 @@ USER node
 
 EXPOSE 8080
 CMD ["npm", "run", "dev"]
+
+# (Optional) enable polling watchers in containers
+ENV CHOKIDAR_USEPOLLING=true WATCHPACK_POLLING=true

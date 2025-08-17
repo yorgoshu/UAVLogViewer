@@ -12,6 +12,9 @@ import 'bootstrap-vue/dist/bootstrap-vue.css'
 // Using imported components
 import VueRouter from 'vue-router'
 
+// Chatbot injector (adds <ChatBot/> inside the sidebar at runtime)
+import { mountChatBot } from './plugins/mount-chatbot'
+
 Vue.use(VueRouter)
 Vue.use(BootstrapVue)
 
@@ -21,8 +24,15 @@ Vue.prototype.$eventHub = new Vue() // Global event bus
 
 /* eslint-disable no-new */
 new Vue({
-    el: '#app',
-    router,
-    components: { App },
-    template: '<App/>'
+  el: '#app',
+  router,
+  components: { App },
+  template: '<App/>'
 })
+
+// Mount the chatbot after the DOM is ready
+if (document.readyState === 'complete' || document.readyState === 'interactive') {
+  setTimeout(mountChatBot, 0)
+} else {
+  document.addEventListener('DOMContentLoaded', () => setTimeout(mountChatBot, 0))
+}
