@@ -1,0 +1,25 @@
+FROM node:18-bullseye
+
+# install git once, since webpack plugin uses it
+RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
+
+# make /usr/src/app the workdir
+WORKDIR /usr/src/app
+
+# allow git-revision-webpack-plugin to read even if UID mismatch
+RUN git config --system --add safe.directory /usr/src/app
+
+# copy only package manifests first (caching layer)
+COPY package*.json ./
+
+# install deps cleanly
+RUN npm ci
+
+# now copy the rest of the source
+COPY . .
+
+# run as non-root "node" user
+USER node
+
+EXPOSE 8080
+CMD ["npm", "run", "dev"]

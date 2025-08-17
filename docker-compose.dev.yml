@@ -1,0 +1,16 @@
+version: "3.8"
+
+services:
+  uavlogviewer-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile_Dev   # the dev Dockerfile we wrote earlier
+    container_name: uavlogviewer-dev
+    ports:
+      - "8080:8080"   # webpack dev server
+    volumes:
+      - .:/usr/src/app   # mount local code into container
+      - /usr/src/app/node_modules  # keep node_modules inside container, not on host
+    working_dir: /usr/src/app
+    stdin_open: true
+    tty: true
