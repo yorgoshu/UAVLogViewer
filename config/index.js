@@ -23,6 +23,12 @@ module.exports = {
         target:"http://localhost:8001/uploaded",
         secure:"false"
       },
+      "/api": {
+        target: "http://agent-dev:8787",
+        changeOrigin: true,
+        logLevel: "debug",
+        pathRewrite: { "^/api": "" }   // /api/chat → /chat
+      },
     },
 
     // Various Dev Server settings
