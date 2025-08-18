@@ -1,76 +1,102 @@
 <template>
-    <div class="chatbot-container">
-        <div class="chat-window">
+    <div class="chatbot">
+        <div class="messages" ref="messages">
             <div
-                v-for="(message, index) in messages"
-                :key="index"
-                class="message-row"
-                :class="message.sender"
+                v-for="(m, idx) in messages"
+                :key="idx"
+                :class="m.role === 'user' ? 'bubble user' : 'bubble bot'"
             >
-                <div class="message-bubble">{{ message.text }}</div>
+                {{ m.text }}
             </div>
         </div>
-        <div class="input-row">
+
+        <div class="composer">
             <input
-                v-model="userInput"
-                @keyup.enter="sendMessage"
+                v-model="input"
+                class="composer-input"
                 type="text"
-                placeholder="Type your message..."
-                class="chat-input"
-            />
-            <button @click="sendMessage" class="chat-send-btn">Send</button>
+                placeholder="Type a message…"
+                @keyup.enter="sendMessage"
+            >
+            <button class="composer-send" @click="sendMessage">Send</button>
         </div>
     </div>
 </template>
 
 <script>
-/* eslint-disable camelcase, dot-notation */
 import axios from 'axios'
 
 export default {
     name: 'ChatBot',
     data () {
         return {
-            userInput: '',
             messages: [],
-            sessionId: this.generateSessionId()
+            input: '',
+            sessionId: this.restoreSession()
         }
     },
     methods: {
-        generateSessionId () {
-            return 'session-' + Math.random().toString(36).substr(2, 9)
+        restoreSession () {
+            try {
+                const s = window.localStorage.getItem('chat_session_id')
+                if (s) return s
+            } catch (e) {}
+            const id = `session-${Math.random().toString(36).slice(2)}`
+            try {
+                window.localStorage.setItem('chat_session_id', id)
+            } catch (e) {}
+            return id
         },
+
+        pushBot (text) {
+            this.messages.push({ role: 'bot', text })
+            this.$nextTick(() => {
+                const el = this.$refs.messages
+                if (el) el.scrollTop = el.scrollHeight
+            })
+        },
+
         async sendMessage () {
-            const userText = this.userInput.trim()
+            const userText = (this.input || '').trim()
             if (!userText) return
 
-            // Add user message
-            this.messages.push({ sender: 'user', text: userText })
-            this.userInput = ''
+            this.messages.push({ role: 'user', text: userText })
+            this.input = ''
 
             try {
-                // Use snake_case keys to match backend contract (valid identifiers; no quotes needed)
-                const body = {
+                // Build payload with bracket keys to satisfy camelcase rule
+                /* eslint-disable camelcase, dot-notation */
+                const payload = {
                     session_id: this.sessionId,
                     user_message: userText,
                     include_digest: true
                 }
+                /* eslint-enable camelcase, dot-notation */
 
-                const response = await axios.post('/api/chat', body)
+                // Must match your proxy (/api/chat -> agent-dev:8787/chat)
+                const res = await axios.post('/api/chat', payload, { timeout: 60000 })
 
-                if (response && response.data && response.data.reply) {
-                    this.messages.push({ sender: 'bot', text: response.data.reply })
-                } else {
-                    this.messages.push({ sender: 'bot', text: 'No reply received.' })
+                const arr = Array.isArray(res.data && res.data.messages)
+                    ? res.data.messages
+                    : []
+
+                const assistant = arr.find(m => m && m.role === 'assistant')
+                const botText = assistant && (assistant.content || assistant.text)
+
+                this.pushBot(botText || 'No reply received from agent.')
+
+                if (res.data && res.data.session_id) {
+                    this.sessionId = res.data.session_id
+                    try {
+                        window.localStorage.setItem('chat_session_id', this.sessionId)
+                    } catch (e) {}
                 }
-            } catch (error) {
-                /* eslint-disable no-console */
-                console.error('Error sending message:', error)
-                /* eslint-enable no-console */
-                this.messages.push({
-                    sender: 'bot',
-                    text: '⚠️ Error: Could not connect.'
-                })
+            } catch (err) {
+                const status = err && err.response && err.response.status
+                    ? ` ${err.response.status}`
+                    : ''
+                const msg = err && err.message ? ` ${err.message}` : ''
+                this.pushBot(`Error from agent:${status}${msg}`)
             }
         }
     }
@@ -78,70 +104,62 @@ export default {
 </script>
 
 <style scoped>
-.chatbot-container {
+.chatbot {
     display: flex;
-    flex-direction: column;
-    height: 100%;
+    flex-direction: column
 }
 
-.chat-window {
-    flex: 1;
+.messages {
+    height: 260px;
     overflow-y: auto;
-    padding: 10px;
-    border: 1px solid #ccc;
-    margin-bottom: 8px;
+    padding: 8px;
+    background: #1f2838;
+    border-radius: 8px
 }
 
-.message-row {
-    display: flex;
-    margin-bottom: 6px;
-}
-
-.message-row.user {
-    justify-content: flex-end;
-}
-
-.message-row.bot {
-    justify-content: flex-start;
-}
-
-.message-bubble {
-    max-width: 70%;
+.bubble {
+    max-width: 85%;
     padding: 8px 12px;
-    border-radius: 14px;
-    background-color: #f1f1f1;
-    word-wrap: break-word;
+    margin: 6px 0;
+    border-radius: 12px;
+    line-height: 1.3
 }
 
-.message-row.user .message-bubble {
-    background-color: #007bff;
-    color: #fff;
+.bubble.user {
+    margin-left: auto;
+    background: #4a6cff;
+    color: #fff
 }
 
-.input-row {
+.bubble.bot {
+    margin-right: auto;
+    background: #e9eef7;
+    color: #1b1f2a
+}
+
+.composer {
     display: flex;
-    border-top: 1px solid #ccc;
-    padding: 6px;
+    gap: 8px;
+    margin-top: 8px
 }
 
-.chat-input {
+.composer-input {
     flex: 1;
-    padding: 6px;
-    border: 1px solid #ccc;
-    border-radius: 4px;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    padding: 8px
 }
 
-.chat-send-btn {
-    margin-left: 8px;
-    padding: 6px 12px;
+.composer-send {
     border: none;
-    background-color: #007bff;
+    border-radius: 8px;
+    padding: 8px 14px;
+    background: #334155;
     color: #fff;
-    border-radius: 4px;
-    cursor: pointer;
+    cursor: pointer
 }
 
-.chat-send-btn:hover {
-    background-color: #0056b3;
+.composer-send:hover {
+    opacity: .9
 }
 </style>
