@@ -26,12 +26,17 @@ services:
     build:
       context: ./agent
     container_name: agent-dev
+    env_file:
+        - .env
     environment:
-      GOOGLE_API_KEY: "${GOOGLE_API_KEY:-}"
+      - GOOGLE_APPLICATION_CREDENTIALS=/secrets/key.json
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ADK_MODEL=gemini-1.5-pro
     ports:
       - "8787:8787"
     volumes:
       - ./agent:/usr/src/app
+      - ./secrets:/secrets:ro
     working_dir: /usr/src/app
     command: bash -lc "pip install -r requirements.txt && uvicorn app.main:app --host 0.0.0.0 --port 8787 --reload"
 

@@ -36,6 +36,24 @@ export default {
         }
     },
     methods: {
+        buildTelemetry () {
+            // TODO: replace the example below with your real data source.
+            // Example if you keep series in Vuex:
+            // const series = this.$store.state.plots?.currentSeries || {}
+
+            // If you have nothing wired yet, return {} — the agent will answer without digest
+            const series = {}
+
+            // Normalize to a simple shape the backend expects
+            // Return keys that exist for you (time, altitude, airspeed, etc.)
+            const telemetry = {}
+
+            if (series.time && Array.isArray(series.time)) telemetry.time = series.time
+            if (series.altitude && Array.isArray(series.altitude)) telemetry.altitude = series.altitude
+            if (series.airspeed && Array.isArray(series.airspeed)) telemetry.airspeed = series.airspeed
+
+            return telemetry
+        },
         restoreSession () {
             try {
                 const s = window.localStorage.getItem('chat_session_id')
