@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional
 import os
 import uuid
 import json
+from typing import Iterable
 
 try:
     # ADK imports (1.11.x)
@@ -131,6 +132,71 @@ def telemetry_from_plot(plot: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
     return telemetry
 
+
+
+def _is_seq(x):
+    return isinstance(x, (list, tuple)) or (
+        hasattr(x, "__iter__") and not isinstance(x, (str, bytes, dict))
+    )
+
+def validate_and_fix_telemetry(tel: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Return a telemetry dict that compute_metrics can safely consume, or None."""
+    if not isinstance(tel, dict):
+        return None
+
+    fixed: Dict[str, Any] = {}
+
+    # time is strongly expected to be a sequence
+    t = tel.get("time")
+    if _is_seq(t):
+        fixed["time"] = list(t)
+    elif isinstance(t, (int, float)):
+        # promote scalar to 1-length sequence
+        fixed["time"] = [t]
+    else:
+        # try to infer time from first series
+        ser = tel.get("series")
+        if isinstance(ser, dict) and ser:
+            first = next(iter(ser.values()))
+            if isinstance(first, dict) and _is_seq(first.get("t")):
+                fixed["time"] = list(first["t"])
+        if "time" not in fixed:
+            return None  # no usable time => skip metrics
+
+    # Copy scalar-series as lists, enforce equal lengths where possible
+    # Pass through common top-level keys as sequences
+    for key, val in tel.items():
+        if key in ("series", "time"):
+            continue
+        if _is_seq(val):
+            fixed[key] = list(val)
+        elif isinstance(val, (int, float)):
+            fixed[key] = [val]
+
+    # Flatten series dict { name: {t:[...], v:[...]} } into fixed["series"] same shape
+    ser = tel.get("series")
+    if isinstance(ser, dict):
+        fixed_series: Dict[str, Any] = {}
+        for name, obj in ser.items():
+            if isinstance(obj, dict):
+                t_arr = obj.get("t")
+                v_arr = obj.get("v")
+                if _is_seq(t_arr) and _is_seq(v_arr):
+                    t_list = list(t_arr)
+                    v_list = list(v_arr)
+                    n = min(len(t_list), len(v_list))
+                    if n > 0:
+                        fixed_series[name] = {"t": t_list[:n], "v": v_list[:n]}
+        if fixed_series:
+            fixed["series"] = fixed_series
+
+    # Final basic sanity: must have time and at least one data vector of same-ish length
+    if not fixed.get("time"):
+        return None
+
+    return fixed
+
+
 @app.post("/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest):
     sid = _sid(req.session_id)
@@ -140,7 +206,8 @@ async def chat(req: ChatRequest):
 
     # --- Optional digest/anomaly computation ---
     # Prefer req.telemetry if the UI sent it; else adapt from plot.series
-    telemetry_payload = req.telemetry or telemetry_from_plot(plot)
+    raw_tel = req.telemetry or telemetry_from_plot(plot)
+    telemetry_payload = validate_and_fix_telemetry(raw_tel) if raw_tel else None
 
     digest, anomalies = None, {}
     if telemetry_payload and req.include_digest:
