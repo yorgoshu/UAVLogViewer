@@ -4,6 +4,7 @@ from pydantic import BaseModel
 from typing import Any, Dict, List, Optional
 import os
 import uuid
+import json
 
 try:
     # ADK imports (1.11.x)
@@ -37,6 +38,7 @@ class ChatRequest(BaseModel):
     user_message: str
     telemetry: Optional[Dict[str, Any]] = None
     include_digest: bool = True
+    digest: Optional[Dict[str, Any]] = None  # <-- add this
 
 
 class ChatResponse(BaseModel):
@@ -51,6 +53,8 @@ SYSTEM_PROMPT = (
     "2) Always answer the user's last request directly.\n"
     "3) If telemetry is missing, ask up to two specific follow-up questions needed to proceed.\n"
     "4) Include units and timestamps in every numeric statement.\n"
+    "You may receive a JSON part (MIME application/json) containing {'plot': {expressions, series}}.\n"
+    "If not present as a JSON part, it may appear as text under [PLOT_JSON]. Use these samples ({t, v}) for calculations.\n"
 )
 
 
@@ -66,21 +70,87 @@ def _sid(given: Optional[str]) -> str:
     return sid
 
 
+def telemetry_from_plot(plot: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """
+    Convert plot.series (list of {name, sample:[{t,v}]}) into a simple telemetry dict
+    your metrics/anomaly tools can consume. We also provide convenient keys:
+    - 'time' (seconds-ish), 'altitude', 'airspeed' when we can infer them.
+    """
+    if not plot:
+        return None
+
+    series = plot.get("series") or []
+    if not isinstance(series, list) or not series:
+        return None
+
+    # Collect per-series arrays
+    by_name: Dict[str, Dict[str, List[float]]] = {}
+    for s in series:
+        name = s.get("name")
+        sample = s.get("sample") or []
+        if not name or not isinstance(sample, list) or not sample:
+            continue
+        t = [p.get("t") for p in sample if isinstance(p.get("t"), (int, float))]
+        v = [p.get("v") for p in sample if isinstance(p.get("v"), (int, float))]
+        if not t or not v:
+            continue
+        # Normalize time to seconds if clearly microseconds or milliseconds
+        # (your UI can also send seconds directly; this is just a safety)
+        # Heuristic: if median t is huge, assume microseconds or ms.
+        mt = t[len(t)//2]
+        if mt > 3.6e9:          # likely microseconds
+            t = [x / 1e6 for x in t]
+        elif mt > 3.6e6:        # likely milliseconds
+            t = [x / 1e3 for x in t]
+        by_name[name] = {"t": t, "v": v}
+
+    if not by_name:
+        return None
+
+    # Convenience keys for downstream metrics
+    def pick(*candidates: str):
+        for c in candidates:
+            if c in by_name:
+                return by_name[c]
+        return None
+
+    alt = pick("GPS.Alt", "BARO.Alt", "GPS.RawAlt")
+    air = pick("ARSP.Airspeed", "NKF1.Spd")
+
+    telemetry: Dict[str, Any] = {"series": by_name}
+    if alt:
+        telemetry["altitude"] = alt["v"]
+        telemetry["time"] = alt["t"]
+    elif air:
+        telemetry["airspeed"] = air["v"]
+        telemetry["time"] = air["t"]
+    else:
+        # Fall back to any series' time just to have a reference clock
+        any_series = next(iter(by_name.values()))
+        telemetry["time"] = any_series["t"]
+
+    return telemetry
+
 @app.post("/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest):
     sid = _sid(req.session_id)
 
+    # Pull plot from digest (sent by the UI)
+    plot = ((req.digest or {}) if req.digest else {}).get("plot", {})
 
+    # --- Optional digest/anomaly computation ---
+    # Prefer req.telemetry if the UI sent it; else adapt from plot.series
+    telemetry_payload = req.telemetry or telemetry_from_plot(plot)
 
-    # Optional digest/anomaly computation
     digest, anomalies = None, {}
-    if req.telemetry and req.include_digest:
+    if telemetry_payload and req.include_digest:
         try:
-            digest = compute_metrics(req.telemetry)
-            anomalies = detect_anomalies(req.telemetry)
+            digest = compute_metrics(telemetry_payload)
+            anomalies = detect_anomalies(telemetry_payload)
         except Exception as e:
             digest = {"error": f"metric computation failed: {e}"}
             anomalies = {}
+    # -------------------------------------------
 
     # Build user content with optional sections
     user_content = req.user_message
@@ -107,11 +177,40 @@ async def chat(req: ChatRequest):
         history_events: List[Event] = []
         for m in SESSIONS[sid]["history"]:
             author = "user" if m.get("role") == "user" else "model"
-            event_content = types.Content(parts=[types.Part.from_text(text=m.get("content", ""))])
+            event_content = types.Content(role='user', parts=[types.Part.from_text(text=m.get("content", ""))])
             history_events.append(Event(author=author, content=event_content))
 
-        # 3) New message as types.Content directly for the runner
-        new_message_for_runner = types.Content(parts=[types.Part.from_text(text=user_content)])
+        # 3) New message: include TEXT + JSON with broad SDK compatibility
+        parts = []
+
+        # -- Text part (prefer from_text, fall back to constructor) --
+        try:
+            parts.append(types.Part.from_text(text=user_content))
+        except Exception:
+            # Some SDKs use direct constructor
+            parts.append(types.Part(text=user_content))
+
+        # -- JSON plot part (try inline_data paths, else fallback to text) --
+        parts = []
+
+        # Text part
+        try:
+            parts.append(types.Part.from_text(text=user_content))
+        except Exception:
+            parts.append(types.Part(text=user_content))
+
+        # Plot as *text* (no JSON MIME)
+        if plot:
+            plot_text = "[PLOT_JSON]\n" + json.dumps({"plot": plot})
+            try:
+                parts.append(types.Part.from_text(text=plot_text))
+            except Exception:
+                parts.append(types.Part(text=plot_text))
+
+        new_message_for_runner = types.Content(role="user", parts=parts)
+
+        if plot:
+            print(f"[plot] series count: {len(plot.get('series', []))}")
 
         # 4) Runner with in-memory session service
         session_service = InMemorySessionService()
