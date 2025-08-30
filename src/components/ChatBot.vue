@@ -29,7 +29,7 @@ import axios from 'axios'
 import { store } from '@/components/Globals'
 
 // Toggle verbose telemetry debug
-const DEBUG_TELEMETRY = true
+const DEBUG_TELEMETRY = false
 const dbg = (...args) => { if (DEBUG_TELEMETRY) console.log('[TEL]', ...args) }
 const warn = (...args) => { if (DEBUG_TELEMETRY) console.warn('[TEL]', ...args) }
 
@@ -400,12 +400,10 @@ export default {
                 // Must match your proxy (/api/chat -> agent-dev:8787/chat)
                 const res = await axios.post('/api/chat', payload, { timeout: 60000 })
 
-                const arr = Array.isArray(res.data && res.data.messages)
-                    ? res.data.messages
-                    : []
-
-                const assistant = arr.find(m => m && m.role === 'assistant')
-                const botText = assistant && (assistant.content || assistant.text)
+                const arr = Array.isArray(res.data?.messages) ? res.data.messages : []
+                // pick the last assistant/model message, not the first
+                const assistant = [...arr].reverse().find(m => m && (m.role === 'assistant' || m.role === 'model'))
+                const botText = (assistant && (assistant.content || assistant.text)) || ''
 
                 this.pushBot(botText || 'No reply received from agent.')
 

@@ -22,6 +22,10 @@ except Exception as e:
 
 from .tools.metrics import compute_metrics, detect_anomalies
 
+
+# Reuse one session service across requests so history actually persists
+SESSION_SERVICE = InMemorySessionService() if ADK_AVAILABLE else None
+
 app = FastAPI(title="UAV Agent API", version="0.1.0")
 app.add_middleware(
     CORSMiddleware,
@@ -54,10 +58,13 @@ SYSTEM_PROMPT = (
     "2) Always answer the user's last request directly.\n"
     "3) If telemetry is missing, ask up to two specific follow-up questions needed to proceed.\n"
     "4) Include units and timestamps in every numeric statement.\n"
-    "You may receive a JSON part (MIME application/json) containing {'plot': {expressions, series}}.\n"
+    "5) You may receive a JSON part (MIME application/json) containing {'plot': {expressions, series}}.\n"
     "If not present as a JSON part, it may appear as text under [PLOT_JSON]. Use these samples ({t, v}) for calculations.\n"
+    "6) The log data follows the ArduPilot log message structure (see https://ardupilot.org/plane/docs/logmessages.html). \n"
+    "You should use those definitions to interpret fields. When a user asks a question, determine which fields are needed \n"
+    "(e.g., GPS.Alt, BARO.Alt, ATT.Roll/Pitch/Yaw, ARSP.Airspeed). If the required fields are not present in the current context,\n"
+    "ask the user to provide or select them."
 )
-
 
 @app.get("/health")
 def health():
@@ -243,9 +250,11 @@ async def chat(req: ChatRequest):
         # and not passed directly to runner.run_async()
         history_events: List[Event] = []
         for m in SESSIONS[sid]["history"]:
-            author = "user" if m.get("role") == "user" else "model"
-            event_content = types.Content(role='user', parts=[types.Part.from_text(text=m.get("content", ""))])
-            history_events.append(Event(author=author, content=event_content))
+            role = "user" if m.get("role") == "user" else "model"
+            # parts constructors vary by SDK; use keyword arg
+            part = types.Part.from_text(text=m.get("content", ""))
+            event_content = types.Content(role=role, parts=[part])
+            history_events.append(Event(author=role, content=event_content))
 
         # 3) New message: include TEXT + JSON with broad SDK compatibility
         parts = []
@@ -280,15 +289,14 @@ async def chat(req: ChatRequest):
             print(f"[plot] series count: {len(plot.get('series', []))}")
 
         # 4) Runner with in-memory session service
-        session_service = InMemorySessionService()
+        session_service = SESSION_SERVICE
         runner = Runner(agent=agent, session_service=session_service, app_name="UAV_Agent")
 
-        # --- IMPORTANT: Ensure the session exists in the SessionService and load history ---
+    # --- IMPORTANT: Ensure the session exists in the SessionService and load history ---
         session = await session_service.get_session(app_name="UAV_Agent", user_id=sid, session_id=sid)
         if not session:
             session = await session_service.create_session(app_name="UAV_Agent", user_id=sid, session_id=sid)
-            # Load initial history into the ADK Session if it's new
-            # Ensure the author is set correctly for historical events
+            # Seed ADK session with existing history exactly once
             for event_to_add in history_events:
                 await session_service.append_event(session, event_to_add)
         # --- END IMPORTANT SECTION ---
